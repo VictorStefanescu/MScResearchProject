@@ -1,0 +1,176 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+from scipy import stats
+warnings.filterwarnings('ignore')
+
+plt.style.use('default')
+
+file_paths = {
+    'H520': r"C:\Users\Vic\Desktop\Project master folder\cellprofiler\FINAL\H520_MASTER_REAL_20250818_1803.csv",
+    'SKMES-1': r"C:\Users\Vic\Downloads\SKMES1_CORRECTED_Sox2_Analysis.csv",
+    'LUDLU-1': r"C:\Users\Vic\Downloads\LUDLU1_MASTER_Sox2_Analysis.csv",
+    'H2170': r"C:\Users\Vic\Downloads\H2170_MASTER_Sox2_Analysis.csv",
+    'H1703': r"C:\Users\Vic\Downloads\H1703_CORRECTED_Sox2_Analysis.csv"
+}
+
+cases = ['H520', 'LUDLU-1']
+controls = ['H2170', 'H1703', 'SKMES-1']
+
+colors = {
+    'H520': '#1f77b4',
+    'SKMES-1': '#ff7f0e',
+    'LUDLU-1': '#2ca02c',
+    'H2170': '#d62728',
+    'H1703': '#9467bd'
+}
+
+def load_cell_line_data(file_path):
+    data = pd.read_csv(file_path)
+    sox2_counts = data['Children_Sox2_Count'].values
+    return sox2_counts[sox2_counts >= 2]
+
+cell_line_data = {}
+for cell_line, file_path in file_paths.items():
+    try:
+        cell_line_data[cell_line] = load_cell_line_data(file_path)
+    except:
+        continue
+
+cases_data = []
+controls_data = []
+for cell_line, sox2_data in cell_line_data.items():
+    if cell_line in cases:
+        cases_data.extend(sox2_data)
+    elif cell_line in controls:
+        controls_data.extend(sox2_data)
+
+cases_data = np.array(cases_data)
+controls_data = np.array(controls_data)
+
+u_statistic, mw_p_value = stats.mannwhitneyu(cases_data, controls_data, alternative='two-sided')
+n1, n2 = len(cases_data), len(controls_data)
+effect_size = 1 - (2 * u_statistic) / (n1 * n2)
+ks_statistic, ks_p_value = stats.ks_2samp(cases_data, controls_data)
+levene_statistic, levene_p_value = stats.levene(cases_data, controls_data)
+
+def get_significance_text(p_value):
+    if p_value < 0.001:
+        return "***", "p < 0.001"
+    elif p_value < 0.01:
+        return "**", "p < 0.01"
+    elif p_value < 0.05:
+        return "*", "p < 0.05"
+    else:
+        return "NS", "p ≥ 0.05"
+
+mw_sig, mw_text = get_significance_text(mw_p_value)
+ks_sig, ks_text = get_significance_text(ks_p_value)
+levene_sig, levene_text = get_significance_text(levene_p_value)
+
+all_signals = []
+for data in cell_line_data.values():
+    all_signals.extend(data)
+
+min_signal = min(all_signals)
+max_signal = max(all_signals)
+signal_range = range(min_signal, max_signal + 1)
+
+distributions = {}
+for cell_line, sox2_data in cell_line_data.items():
+    total_nuclei = len(sox2_data)
+    frequencies = []
+    for signal_count in signal_range:
+        count = np.sum(sox2_data == signal_count)
+        percentage = (count / total_nuclei) * 100
+        frequencies.append(percentage)
+    distributions[cell_line] = {'frequencies': frequencies, 'sample_size': total_nuclei}
+
+fig, ax = plt.subplots(figsize=(12, 10))
+
+for cell_line, dist_data in distributions.items():
+    color = colors[cell_line]
+    frequencies = dist_data['frequencies']
+    sample_size = dist_data['sample_size']
+    ax.plot(signal_range, frequencies, color=color, linewidth=3, marker='o', markersize=6, alpha=0.8,
+            label=f'{cell_line} (N={sample_size})')
+
+ax.set_xlabel('Sox2 Signals per Nucleus', fontsize=14, fontweight='bold')
+ax.set_ylabel('% of Nuclei', fontsize=14, fontweight='bold')
+ax.set_xlim(min_signal - 0.5, max_signal + 0.5)
+ax.set_ylim(0, None)
+ax.grid(True, alpha=0.3, linewidth=0.5)
+ax.legend(loc='upper right', fontsize=11, frameon=True, fancybox=True, shadow=True, framealpha=0.9)
+
+stats_text = f"""STATISTICAL COMPARISON: Cases vs Controls
+Cases: N={len(cases_data)}, Mean={np.mean(cases_data):.1f}
+Controls: N={len(controls_data)}, Mean={np.mean(controls_data):.1f}
+
+Mann-Whitney U Test: {mw_sig} ({mw_text})
+Kolmogorov-Smirnov: {ks_sig} ({ks_text})
+Levene's Test: {levene_sig} ({levene_text})
+
+* p<0.05, ** p<0.01, *** p<0.001, NS = Not Significant"""
+
+ax.text(0.6, 0.75, stats_text, transform=ax.transAxes, fontsize=10, verticalalignment='top',
+        horizontalalignment='left', bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgray', 
+        alpha=0.8, edgecolor='black'))
+
+ax.tick_params(axis='both', which='major', labelsize=12)
+ax.set_xticks(signal_range)
+plt.tight_layout()
+plt.show()
+
+amplification_data = []
+for cell_line, sox2_data in cell_line_data.items():
+    total = len(sox2_data)
+    normal = np.sum(sox2_data == 2)
+    low_amp = np.sum((sox2_data >= 3) & (sox2_data <= 10))
+    high_amp = np.sum(sox2_data > 10)
+    
+    normal_pct = (normal / total) * 100
+    low_pct = (low_amp / total) * 100
+    high_pct = (high_amp / total) * 100
+    total_amp_pct = low_pct + high_pct
+    
+    amplification_data.append({
+        'cell_line': cell_line, 'normal_pct': normal_pct, 'low_pct': low_pct,
+        'high_pct': high_pct, 'total_amp_pct': total_amp_pct, 'sample_size': total
+    })
+
+amplification_data.sort(key=lambda x: x['total_amp_pct'], reverse=True)
+ordered_cell_lines = [item['cell_line'] for item in amplification_data]
+
+fig, ax = plt.subplots(figsize=(10, 8))
+
+cell_lines = ordered_cell_lines
+normal_data = [item['normal_pct'] for item in amplification_data]
+low_amp_data = [item['low_pct'] for item in amplification_data]
+high_amp_data = [item['high_pct'] for item in amplification_data]
+sample_sizes = [item['sample_size'] for item in amplification_data]
+
+x_pos = np.arange(len(cell_lines))
+width = 0.6
+
+normal_color = '#98FB98'
+low_amp_color = '#FFD700'
+high_amp_color = '#CD5C5C'
+
+bars1 = ax.bar(x_pos, normal_data, width, label='Normal (2)', color=normal_color, 
+               alpha=0.8, edgecolor='white', linewidth=1)
+bars2 = ax.bar(x_pos, low_amp_data, width, bottom=normal_data, label='Low-level amp (3-10)', 
+               color=low_amp_color, alpha=0.8, edgecolor='white', linewidth=1)
+bars3 = ax.bar(x_pos, high_amp_data, width, bottom=[i+j for i,j in zip(normal_data, low_amp_data)], 
+               label='High-level amp (>10)', color=high_amp_color, alpha=0.8, edgecolor='white', linewidth=1)
+
+ax.set_xlabel('Cell Lines', fontsize=14, fontweight='bold')
+ax.set_ylabel('Percentage of Nuclei', fontsize=14, fontweight='bold')
+ax.set_xticks(x_pos)
+ax.set_xticklabels([f'{cl}\n(N={n})' for cl, n in zip(cell_lines, sample_sizes)], fontsize=11)
+ax.set_ylim(0, 100)
+ax.grid(True, alpha=0.3, axis='y', linewidth=0.5)
+ax.legend(loc='upper right', fontsize=11, frameon=True, fancybox=True, shadow=True, framealpha=0.9)
+ax.tick_params(axis='both', which='major', labelsize=12)
+plt.tight_layout()
+plt.show()
