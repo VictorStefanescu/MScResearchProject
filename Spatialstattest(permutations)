@@ -1,0 +1,205 @@
+import pandas as pd
+import numpy as np
+from scipy.spatial.distance import cdist
+from scipy.spatial import cKDTree
+import os
+import warnings
+warnings.filterwarnings('ignore')
+
+def hopkins_statistic(data, n_samples=None):
+    """Calculate Hopkins statistic for spatial clustering"""
+    if n_samples is None:
+        n_samples = min(len(data)//4, 10)
+    
+    if n_samples < 2:
+        return 0.5
+    
+    x_min, x_max = data[:, 0].min(), data[:, 0].max()
+    y_min, y_max = data[:, 1].min(), data[:, 1].max()
+    
+    # Generate random points in data space
+    random_points = np.column_stack([
+        np.random.uniform(x_min, x_max, n_samples),
+        np.random.uniform(y_min, y_max, n_samples)
+    ])
+    
+    # Calculate W: distances from random points to nearest actual points
+    W = 0
+    for point in random_points:
+        distances = cdist([point], data)[0]
+        W += np.min(distances)
+    
+    # Calculate U: distances from sample points to nearest neighbors
+    sample_indices = np.random.choice(len(data), size=n_samples, replace=False)
+    U = 0
+    for idx in sample_indices:
+        other_data = np.delete(data, idx, axis=0)
+        if len(other_data) > 0:
+            distances = cdist([data[idx]], other_data)[0]
+            U += np.min(distances)
+    
+    H = U / (U + W) if (U + W) > 0 else 0.5
+    return H
+
+def permutation_test_hopkins(data, n_iterations=1000):
+    """Permutation test for Hopkins statistic significance"""
+    observed_hopkins = hopkins_statistic(data)
+    
+    x_min, x_max = data[:, 0].min(), data[:, 0].max()
+    y_min, y_max = data[:, 1].min(), data[:, 1].max()
+    
+    null_hopkins = []
+    print(f"Running {n_iterations} permutations...")
+    
+    for i in range(n_iterations):
+        if (i + 1) % 100 == 0:
+            print(f"  Iteration {i+1}/{n_iterations}")
+        
+        # Create random permutation within same spatial bounds
+        random_data = np.column_stack([
+            np.random.uniform(x_min, x_max, len(data)),
+            np.random.uniform(y_min, y_max, len(data))
+        ])
+        
+        null_h = hopkins_statistic(random_data)
+        null_hopkins.append(null_h)
+    
+    null_hopkins = np.array(null_hopkins)
+    
+    # Calculate p-values
+    p_value_clustered = np.sum(null_hopkins <= observed_hopkins) / n_iterations
+    p_value_dispersed = np.sum(null_hopkins >= observed_hopkins) / n_iterations
+    p_value_two_tailed = 2 * min(p_value_clustered, p_value_dispersed)
+    
+    return {
+        'observed_hopkins': observed_hopkins,
+        'p_value_clustered': p_value_clustered,
+        'p_value_dispersed': p_value_dispersed, 
+        'p_value_two_tailed': p_value_two_tailed,
+        'null_mean': np.mean(null_hopkins),
+        'null_std': np.std(null_hopkins)
+    }
+
+def load_h520_spatial_data():
+    """Load H520 spatial coordinate data from all imagesets"""
+    
+    base_path = r"C:\Users\Vic\Desktop\Project master folder\cellprofiler\FINAL"
+    
+    # Try common H520 imageset folder names
+    possible_folders = ["H520", "FLUORESCENT1", "FLUORESCENT2", "FLUORESCENT3", "FLUORESCENT4",
+                       "COMPOSITE", "CONFOCAL", "SHOE", "SMOOTH"]
+    
+    all_coords = []
+    nuclei_data = {}
+    
+    for folder in possible_folders:
+        sox2_file = os.path.join(base_path, folder, "cellprofileSox2.csv")
+        
+        try:
+            if os.path.exists(sox2_file):
+                df = pd.read_csv(sox2_file)
+                print(f"Found Sox2 data in {folder}: {len(df)} signals")
+                
+                # Find coordinate columns
+                x_cols = [col for col in df.columns if 'center_x' in col.lower() or 'location_x' in col.lower()]
+                y_cols = [col for col in df.columns if 'center_y' in col.lower() or 'location_y' in col.lower()]
+                
+                if not x_cols or not y_cols:
+                    x_cols = [col for col in df.columns if col.lower().endswith('_x')]
+                    y_cols = [col for col in df.columns if col.lower().endswith('_y')]
+                
+                if x_cols and y_cols:
+                    x_col, y_col = x_cols[0], y_cols[0]
+                    parent_col = 'Parent_Nuclei' if 'Parent_Nuclei' in df.columns else 'ObjectNumber'
+                    
+                    print(f"Using coordinates: {x_col}, {y_col}")
+                    
+                    # Group by nucleus
+                    if parent_col in df.columns:
+                        for nucleus_id in df[parent_col].unique():
+                            nucleus_signals = df[df[parent_col] == nucleus_id]
+                            coords = nucleus_signals[[x_col, y_col]].values
+                            
+                            if len(coords) >= 2:  # Need at least 2 signals for clustering
+                                nuclei_data[f"{folder}_{nucleus_id}"] = coords
+        
+        except Exception as e:
+            print(f"Could not load {folder}: {e}")
+    
+    print(f"Total nuclei with >=2 signals: {len(nuclei_data)}")
+    return nuclei_data
+
+def analyze_h520_hopkins():
+    """Main analysis function for H520 Hopkins permutation testing"""
+    
+    print("=== H520 HOPKINS STATISTIC PERMUTATION P-VALUES ===")
+    
+    # Load spatial data
+    nuclei_data = load_h520_spatial_data()
+    
+    if not nuclei_data:
+        print("No spatial coordinate data found")
+        return
+    
+    print(f"Analyzing {len(nuclei_data)} nuclei...")
+    
+    hopkins_results = []
+    
+    for nucleus_id, coords in nuclei_data.items():
+        print(f"\nAnalyzing nucleus {nucleus_id} ({len(coords)} signals)")
+        
+        # Run permutation test
+        perm_result = permutation_test_hopkins(coords, n_iterations=1000)
+        
+        perm_result['nucleus_id'] = nucleus_id
+        perm_result['signal_count'] = len(coords)
+        hopkins_results.append(perm_result)
+        
+        print(f"  Hopkins statistic: {perm_result['observed_hopkins']:.4f}")
+        print(f"  P-value (clustering): {perm_result['p_value_clustered']:.6f}")
+        print(f"  P-value (two-tailed): {perm_result['p_value_two_tailed']:.6f}")
+    
+    # Summary statistics
+    print(f"\n" + "="*60)
+    print("SUMMARY OF H520 HOPKINS PERMUTATION P-VALUES")
+    print("="*60)
+    
+    all_p_values = [r['p_value_two_tailed'] for r in hopkins_results]
+    clustered_p_values = [r['p_value_clustered'] for r in hopkins_results]
+    hopkins_scores = [r['observed_hopkins'] for r in hopkins_results]
+    
+    print(f"Total nuclei analyzed: {len(hopkins_results)}")
+    print(f"Mean Hopkins statistic: {np.mean(hopkins_scores):.4f}")
+    print(f"Median Hopkins statistic: {np.median(hopkins_scores):.4f}")
+    
+    print(f"\nP-VALUE STATISTICS:")
+    print(f"Mean p-value (two-tailed): {np.mean(all_p_values):.6f}")
+    print(f"Median p-value (two-tailed): {np.median(all_p_values):.6f}")
+    print(f"Min p-value: {np.min(all_p_values):.6f}")
+    print(f"Max p-value: {np.max(all_p_values):.6f}")
+    
+    significant_05 = len([p for p in all_p_values if p < 0.05])
+    significant_01 = len([p for p in all_p_values if p < 0.01])
+    
+    print(f"\nSIGNIFICANCE COUNTS:")
+    print(f"p < 0.05: {significant_05}/{len(all_p_values)} nuclei ({significant_05/len(all_p_values)*100:.1f}%)")
+    print(f"p < 0.01: {significant_01}/{len(all_p_values)} nuclei ({significant_01/len(all_p_values)*100:.1f}%)")
+    
+    # List all individual p-values
+    print(f"\n" + "="*40)
+    print("INDIVIDUAL NUCLEUS P-VALUES")
+    print("="*40)
+    print(f"{'Nucleus':<15} {'Hopkins':<8} {'P-value':<12} {'Significant'}")
+    print("-" * 50)
+    
+    for result in hopkins_results:
+        sig_marker = "***" if result['p_value_two_tailed'] < 0.001 else "**" if result['p_value_two_tailed'] < 0.01 else "*" if result['p_value_two_tailed'] < 0.05 else "NS"
+        
+        print(f"{result['nucleus_id']:<15} {result['observed_hopkins']:<8.4f} "
+              f"{result['p_value_two_tailed']:<12.6f} {sig_marker}")
+    
+    return hopkins_results
+
+# Run the analysis
+if __name__ == "__main__":
+    h520_results = analyze_h520_hopkins()
