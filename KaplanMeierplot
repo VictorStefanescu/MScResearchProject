@@ -1,0 +1,57 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from lifelines import KaplanMeierFitter
+from lifelines.statistics import logrank_test
+
+# Load data
+survival_df = pd.read_excel("C:/Genes/survival.xlsx")
+amplification_df = pd.read_excel("C:/Genes/CNA.xlsx")
+
+# Clean IDs
+amplification_df['SAMPLE_ID'] = amplification_df['SAMPLE_ID'].str.slice(0, 12)
+merged_df = pd.merge(survival_df, amplification_df, on='SAMPLE_ID', how='inner')
+
+# Define event
+df = merged_df
+df['event'] = df['Status'].str.lower().map({'deceased': 1, 'censored': 0})
+
+# Set up plot
+plt.figure(figsize=(10, 6))
+kmf = KaplanMeierFitter()
+
+# Define groups and colors
+group_labels = {
+    0: 'No Amplification',
+    1: 'Low-Level Amplification',
+    2: 'High-Level Amplification'
+}
+colors = ['blue', 'orange', 'red']
+positions = [0.6, 0.5, 0.4]  # for p-value text positions
+
+# Plot each group
+for i, (amp_level, label) in enumerate(group_labels.items()):
+    group_df = df[df['SOX2'] == amp_level]
+    kmf.fit(durations=group_df['Time (months)'], event_observed=group_df['event'], label=label)
+    kmf.plot_survival_function(ci_show=False, color=colors[i])
+
+# Calculate and display pairwise log-rank test p-values
+pairs = [(0, 1), (0, 2), (1, 2)]
+for i, (g1, g2) in enumerate(pairs):
+    group1 = df[df['SOX2'] == g1]
+    group2 = df[df['SOX2'] == g2]
+    result = logrank_test(
+        group1['Time (months)'], group2['Time (months)'],
+        event_observed_A=group1['event'], event_observed_B=group2['event']
+    )
+    p_text = f"P({group_labels[g1]} vs {group_labels[g2]}) = {result.p_value:.4f}"
+    plt.text(0.55, positions[i], p_text, transform=plt.gca().transAxes,
+             fontsize=10, bbox=dict(facecolor='white', alpha=0.7))
+
+# Final plot formatting
+plt.title("Kaplan-Meier Survival by SOX2 Amplification Status")
+plt.xlabel("Time (months)")
+plt.ylabel("Survival Probability")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
