@@ -1,0 +1,98 @@
+import pandas as pd
+import numpy as np
+from scipy import stats
+from scipy.stats import skew, kurtosis
+import warnings
+warnings.filterwarnings('ignore')
+
+# Load H520 data
+file_path = r"C:\Users\Vic\Desktop\Project master folder\cellprofiler\FINAL\H520_MASTER_REAL_20250818_1803.csv"
+
+print("=== H520 SKEWNESS AND KURTOSIS ANALYSIS ===")
+
+try:
+    df = pd.read_csv(file_path)
+    print(f"Loaded H520 dataset: {len(df)} nuclei")
+    
+    # Get Sox2 signal counts
+    if 'Children_Sox2_Count' in df.columns:
+        sox2_counts = df['Children_Sox2_Count'].values
+    else:
+        print("Error: No Sox2 count column found")
+        print(f"Available columns: {df.columns.tolist()}")
+        exit()
+    
+    # Filter for signals >= 2 (exclude artifacts)
+    filtered_counts = sox2_counts[sox2_counts >= 2]
+    
+    print(f"Valid Sox2 signals (>=2): {len(filtered_counts)}")
+    print(f"Signal range: {filtered_counts.min()} - {filtered_counts.max()}")
+    print(f"Mean: {np.mean(filtered_counts):.2f}")
+    print(f"Median: {np.median(filtered_counts):.1f}")
+    print(f"Standard deviation: {np.std(filtered_counts):.2f}")
+    
+    # Calculate skewness and kurtosis
+    skewness_value = skew(filtered_counts)
+    kurtosis_value = kurtosis(filtered_counts, fisher=True)  # Excess kurtosis (normal=0)
+    
+    # Calculate standard errors
+    n = len(filtered_counts)
+    
+    # Skewness standard error formula
+    skew_se = np.sqrt(6 * n * (n-1) / ((n-2) * (n+1) * (n+3)))
+    
+    # Kurtosis standard error formula  
+    kurt_se = np.sqrt(24 * n * (n-1)**2 / ((n-3) * (n-2) * (n+5) * (n+7)))
+    
+    # Calculate z-scores for significance testing
+    skew_z = skewness_value / skew_se
+    kurt_z = kurtosis_value / kurt_se
+    
+    # Calculate p-values (two-tailed)
+    skew_p = 2 * (1 - stats.norm.cdf(abs(skew_z)))
+    kurt_p = 2 * (1 - stats.norm.cdf(abs(kurt_z)))
+    
+    print(f"\n=== EXACT VALUES REQUESTED ===")
+    print(f"skewness = {skewness_value:.6f}")
+    print(f"kurtosis = {kurtosis_value:.6f}")
+    print(f"skewness standard error = {skew_se:.6f}")
+    print(f"kurtosis standard error = {kurt_se:.6f}")
+    
+    print(f"\n=== ADDITIONAL STATISTICAL INFO ===")
+    print(f"Sample size (n) = {n}")
+    print(f"Skewness z-score = {skew_z:.3f}")
+    print(f"Kurtosis z-score = {kurt_z:.3f}")
+    print(f"Skewness p-value = {skew_p:.6f}")
+    print(f"Kurtosis p-value = {kurt_p:.6f}")
+    
+    # Interpretation
+    print(f"\n=== INTERPRETATION ===")
+    if abs(skewness_value) < 0.5:
+        skew_interp = "approximately symmetric"
+    elif skewness_value > 0.5:
+        skew_interp = "right-skewed (long right tail)"
+    else:
+        skew_interp = "left-skewed (long left tail)"
+    
+    if abs(kurtosis_value) < 0.5:
+        kurt_interp = "normal tail thickness (mesokurtic)"
+    elif kurtosis_value > 0.5:
+        kurt_interp = "heavy tails (leptokurtic)"
+    else:
+        kurt_interp = "light tails (platykurtic)"
+    
+    print(f"Skewness: {skew_interp}")
+    print(f"Kurtosis: {kurt_interp}")
+    
+    if skew_p < 0.05:
+        print(f"Skewness is significantly different from normal distribution (p < 0.05)")
+    else:
+        print(f"Skewness not significantly different from normal")
+    
+    if kurt_p < 0.05:
+        print(f"Kurtosis is significantly different from normal distribution (p < 0.05)")
+    else:
+        print(f"Kurtosis not significantly different from normal")
+
+except Exception as e:
+    print(f"Error: {e}")
